@@ -1,0 +1,319 @@
+import os
+import json
+import pickle
+import numpy as np
+import streamlit as st
+from datetime import datetime
+from deepseek_api import DeepSeekAPI
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+import faiss
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+# Configuración inicial
+DEEPSEEK_API_KEY = "sk-1fafb10417c84692b738fd84598fd7a8"  # Reemplazar con tu API key
+deepseek = DeepSeekAPI(api_key=DEEPSEEK_API_KEY)
+EMBED_MODEL = "deepseek-embeddings-v1"
+CHAT_MODEL = "deepseek-chat"
+
+# Configuración de la UI
+st.set_page_config(
+    page_title="DeepSeek RAG Assistant",
+    page_icon="🧠",
+    layout="centered",
+    initial_sidebar_state="expanded"
+)
+
+# Estilos CSS personalizados
+st.markdown("""
+<style>
+    :root {
+        --primary: #2B7A78;
+        --secondary: #3AAFA9;
+        --background: #FEFFFF;
+        --text: #17252A;
+    }
+    
+    .main { background-color: var(--background); }
+    .stButton>button { background-color: var(--primary); color: white; }
+    .sidebar .sidebar-content { background-color: var(--background); }
+    .response-box { 
+        border: 2px solid var(--secondary);
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin: 1rem 0;
+        background-color: #FEFFFF;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .reference-item { 
+        margin: 0.5rem 0;
+        padding: 0.8rem;
+        background-color: #DEF2F1;
+        border-radius: 6px;
+        transition: transform 0.2s;
+    }
+    .reference-item:hover {
+        transform: translateX(5px);
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Inicialización del estado de sesión
+class SessionState:
+    def __init__(self):
+        self.faiss_index = faiss.IndexFlatL2(1024)
+        self.metadata_map = {}
+        self.document_store = defaultdict(list)
+        self.chat_history = []
+        self.uploaded_files = []
+
+def init_session():
+    if 'state' not in st.session_state:
+        st.session_state.state = SessionState()
+
+# Módulos principales
+class DocumentProcessor:
+    def __init__(self):
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=512,
+            chunk_overlap=64,
+            separators=["\n\n", "\n", ". ", "? ", "! ", " "]
+        )
+    
+    def process_file(self, file):
+        try:
+            text = self._extract_text(file)
+            chunks = self.text_splitter.split_text(text)
+            embeddings = self._get_embeddings(chunks)
+            self._store_metadata(file, chunks, embeddings)
+            return True
+        except Exception as e:
+            st.error(f"Error processing file: {str(e)}")
+            return False
+    
+    def _extract_text(self, file):
+        # Implementar extracción real de PDF/DOCX
+        return "Texto de ejemplo extraído del archivo."
+    
+    def _get_embeddings(self, chunks):
+        return deepseek.embeddings.create(
+            input=chunks,
+            model=EMBED_MODEL
+        ).data
+    
+    def _store_metadata(self, file, chunks, embeddings):
+        for idx, (chunk, embed) in enumerate(zip(chunks, embeddings)):
+            doc_id = f"{file.name}_{idx}_{datetime.now().timestamp()}"
+            metadata = {
+                'doc_id': doc_id,
+                'content': chunk,
+                'embedding': embed.embedding,
+                'source': file.name,
+                'timestamp': datetime.now().isoformat(),
+                'semantic_tags': self._generate_semantic_tags(chunk)
+            }
+            st.session_state.state.metadata_map[doc_id] = metadata
+            st.session_state.state.document_store[file.name].append(doc_id)
+            
+            # Actualizar índice FAISS
+            embeddings_array = np.array([embed.embedding], dtype=np.float32)
+            ids_array = np.array([hash(doc_id) % (1 << 64)], dtype=np.int64)
+            st.session_state.state.faiss_index.add_with_ids(embeddings_array, ids_array)
+
+    def _generate_semantic_tags(self, text):
+        response = deepseek.chat.completions.create(
+            model=CHAT_MODEL,
+            messages=[{
+                "role": "user",
+                "content": f"Genera 3-5 etiquetas temáticas clave para este texto: {text}"
+            }]
+        )
+        return response.choices[0].message.content.split(", ")
+
+class ChatManager:
+    def __init__(self):
+        self.vectorizer = TfidfVectorizer(stop_words='english')
+    
+    def hybrid_search(self, query, top_k=5):
+        # Búsqueda vectorial
+        query_embed = deepseek.embeddings.create(
+            input=[query],
+            model=EMBED_MODEL
+        ).data[0].embedding
+        
+        D, I = st.session_state.state.faiss_index.search(
+            np.array([query_embed], dtype=np.float32), 
+            top_k*2
+        )
+        
+        # Búsqueda léxica
+        corpus = [" ".join(doc['content']) for doc in st.session_state.state.metadata_map.values()]
+        if corpus:
+            self.vectorizer.fit(corpus)
+            query_vec = self.vectorizer.transform([query])
+            doc_scores = cosine_similarity(query_vec, self.vectorizer.transform(corpus)).flatten()
+            lexical_ids = np.argsort(doc_scores)[-top_k*2:][::-1]
+        
+        # Combinar resultados
+        combined_ids = list(set(I.flatten().tolist() + lexical_ids.tolist()))[:top_k]
+        return [
+            st.session_state.state.metadata_map[list(st.session_state.state.metadata_map.keys())[idx]]
+            for idx in combined_ids if idx < len(st.session_state.state.metadata_map)
+        ]
+    
+    def generate_response(self, query, context):
+        messages = [{
+            "role": "system",
+            "content": f"Contexto:\n{context}\n\nResponde de manera precisa y profesional."
+        }, {
+            "role": "user",
+            "content": query
+        }]
+        
+        response = deepseek.chat.completions.create(
+            model=CHAT_MODEL,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1500
+        )
+        return response.choices[0].message.content
+
+# Interfaz de usuario mejorada
+class DeepSeekUI:
+    def __init__(self):
+        self.processor = DocumentProcessor()
+        self.chat_manager = ChatManager()
+    
+    def render_sidebar(self):
+        with st.sidebar:
+            st.title("⚙️ Configuración")
+            
+            with st.expander("📤 Gestión de Documentos"):
+                uploaded_files = st.file_uploader(
+                    "Subir documentos (PDF/DOCX)",
+                    type=["pdf", "docx"],
+                    accept_multiple_files=True
+                )
+                if st.button("Procesar Documentos", type="primary"):
+                    for file in uploaded_files:
+                        if file.name not in st.session_state.state.uploaded_files:
+                            if self.processor.process_file(file):
+                                st.session_state.state.uploaded_files.append(file.name)
+                                st.session_state.state.chat_history.append({
+                                    'type': 'system',
+                                    'content': f"📄 Documento procesado: {file.name}"
+                                })
+            
+            with st.expander("🔍 Opciones de Búsqueda"):
+                self.search_type = st.radio(
+                    "Modo de búsqueda:",
+                    ["Híbrida", "Vectorial", "Semántica"],
+                    index=0
+                )
+                
+                self.creativity = st.slider(
+                    "Nivel de creatividad:",
+                    min_value=0.0, max_value=1.0, value=0.5,
+                    help="Controla el balance entre precisión y originalidad"
+                )
+    
+    def render_chat(self):
+        st.title("🧠 Asistente DeepSeek RAG")
+        
+        # Historial de chat
+        chat_container = st.container(height=500)
+        with chat_container:
+            for msg in st.session_state.state.chat_history:
+                self._render_message(msg)
+        
+        # Entrada de usuario
+        query = st.chat_input("Escribe tu pregunta...")
+        if query:
+            self._handle_user_query(query)
+    
+    def _render_message(self, msg):
+        if msg['type'] == 'user':
+            st.markdown(f"""
+            <div style="margin: 1rem 0; padding: 1rem; 
+                        background: #e3f2fd; border-radius: 10px;
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.1)">
+                <strong>👤 Tú:</strong> {msg['content']}
+            </div>
+            """, unsafe_allow_html=True)
+        
+        elif msg['type'] == 'assistant':
+            with st.expander("💡 Respuesta Completa", expanded=True):
+                st.markdown(f"""
+                <div style="margin: 0.5rem 0; padding: 1rem;
+                            background: #f5f5f5; border-radius: 10px;">
+                    <strong>🤖 Asistente:</strong> {msg['content']}
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if 'references' in msg:
+                    st.markdown("**🔍 Fuentes Relacionadas:**")
+                    for ref in msg['references']:
+                        st.markdown(f"""
+                        <div class="reference-item">
+                            📌 {ref}
+                        </div>
+                        """, unsafe_allow_html=True)
+    
+    def _handle_user_query(self, query):
+        st.session_state.state.chat_history.append({
+            'type': 'user',
+            'content': query
+        })
+        
+        with st.spinner("🔍 Buscando información relevante..."):
+            results = self.chat_manager.hybrid_search(query)
+            context = "\n\n".join(
+                f"[Fuente: {res['source']}]\n{res['content']}" 
+                for res in results
+            )
+        
+        with st.spinner("💡 Generando respuesta..."):
+            response = self.chat_manager.generate_response(query, context)
+            references = [
+                f"{res['source']} - {', '.join(res['semantic_tags'][:2])}" 
+                for res in results
+            ]
+            
+            st.session_state.state.chat_history.append({
+                'type': 'assistant',
+                'content': response,
+                'references': references,
+                'validation': self._validate_response(response, context)
+            })
+        
+        st.rerun()
+    
+    def _validate_response(self, response, context):
+        validation_prompt = f"""
+        Evalúa la siguiente respuesta basada en el contexto proporcionado:
+        
+        **Respuesta:**
+        {response}
+        
+        **Contexto:**
+        {context}
+        
+        Proporciona una validación en formato JSON con:
+        - score (1-5)
+        - valid (true/false)
+        - reasons (lista de razones)
+        """
+        
+        validation = deepseek.chat.completions.create(
+            model=CHAT_MODEL,
+            messages=[{"role": "user", "content": validation_prompt}],
+            response_format={"type": "json_object"}
+        )
+        return json.loads(validation.choices[0].message.content)
+
+# Inicialización y ejecución
+if __name__ == "__main__":
+    init_session()
+    ui = DeepSeekUI()
+    ui.render_sidebar()
+    ui.render_chat()
