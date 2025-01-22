@@ -16,6 +16,7 @@ from docx import Document
 # Agrega estas importaciones al inicio del archivo
 from docx.table import Table
 from docx.document import Document as DocxDocument
+from docx.text.paragraph import Paragraph  # Importar Paragraph
 from io import BytesIO
 from functools import lru_cache
 import time
@@ -24,6 +25,7 @@ import faiss
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
+import re
 
 # Configuración inicial
 embedder = SentenceTransformer('all-MiniLM-L6-v2')
@@ -47,6 +49,16 @@ def init_session():
     if 'state' not in st.session_state:
         st.session_state.state = SessionState()
 
+
+
+def extract_metadata_from_filename(filename):
+    # Ejemplo: "Bravo-Santillana_2021_Tesis.pdf"
+    pattern = r"^(?P<author>[^_]+)_(?P<year>\d{4})_(?P<title>.+)\.pdf$"
+    match = re.match(pattern, filename)
+    if match:
+        return match.groupdict()
+    return {"author": "Desconocido", "year": "N/A", "title": filename}
+
 def generate_doc_id(file_name, chunk_index):
     hash_object = hashlib.sha256(f"{file_name}_{chunk_index}".encode())
     return struct.unpack('>q', hash_object.digest()[:8])[0]
@@ -58,7 +70,31 @@ class DocumentProcessor:
             chunk_overlap=100,
             separators=["\n\n", "\n", ". ", "? ", "! ", " "]
         )
-    
+
+    def extract_text_from_pages(self, file, start_page, end_page):
+        """
+        Extrae texto de un rango específico de páginas de un archivo PDF.
+
+        Args:
+            file: Archivo PDF.
+            start_page (int): Número de la primera página (basado en 1).
+            end_page (int): Número de la última página (basado en 1).
+
+        Returns:
+            str: Texto extraído de las páginas especificadas.
+        """
+        try:
+            file.seek(0)  # Reinicia el puntero del archivo al inicio
+            doc = fitz.open(stream=file.read(), filetype="pdf")
+            text = ""
+            for page_num in range(start_page - 1, end_page):  # PyMuPDF usa índice base 0
+                page = doc.load_page(page_num)
+                text += page.get_text()
+            return text
+        except Exception as e:
+            st.error(f"Error extrayendo texto de páginas {start_page}-{end_page}: {str(e)}")
+            return ""
+
     def process_file(self, file):
         try:
             if file is None or file.size == 0:
@@ -75,6 +111,12 @@ class DocumentProcessor:
                 # Determina las páginas correspondientes al chunk
                 start_page = page_numbers[0] if page_numbers else None
                 end_page = page_numbers[-1] if page_numbers else None
+
+                # Verificar que el chunk esté contenido en las páginas
+                if start_page and end_page:
+                    page_text = self.extract_text_from_pages(file, start_page, end_page)
+                    if chunk not in page_text:
+                        st.warning(f"El chunk {idx} no está completamente contenido en las páginas {start_page}-{end_page}.")
 
                 doc_id = generate_doc_id(file.name, idx)
                 
@@ -110,32 +152,7 @@ class DocumentProcessor:
         except Exception as e:
             st.error(f"Error procesando archivo: {str(e)}")
             return False
-    
-    
-    def _extract_pdf_metadata(self, file):
-        """Extrae metadatos de PDFs con soporte para campos vacíos."""
-        try:
-            doc = fitz.open(stream=file.read(), filetype="pdf")
-            metadata = doc.metadata
-            
-            return {
-                "title": metadata.get("title", "Sin título"),
-                "author": metadata.get("author", "Desconocido"),
-                "creation_date": metadata.get("creationDate", "N/A"),
-                "subject": metadata.get("subject", ""),
-                "keywords": metadata.get("keywords", ""),
-                "comments": metadata.get("comments", "")
-            }
-        except Exception as e:
-            st.error(f"Error extrayendo metadatos PDF: {str(e)}")
-            return {
-                "title": "Desconocido",
-                "author": "Desconocido",
-                "creation_date": "N/A",
-                "subject": "",
-                "keywords": "",
-                "comments": ""
-            }
+
     def _extract_metadata(self, file):
         if file.name.endswith('.pdf'):
             return self._extract_pdf_metadata(file)
@@ -150,35 +167,6 @@ class DocumentProcessor:
                 "keywords": "",
                 "comments": ""
             }
-    def _extract_text_with_page_markers(self, file):
-        if file.name.endswith('.pdf'):
-            return self._extract_text_from_pdf(file)
-        elif file.name.endswith('.docx'):
-            return self._extract_text_from_docx(file)
-        else:
-            return ""
-        
-    def _extract_text_from_docx(self, file):
-        """Extrae texto de DOCX con manejo de formatos complejos."""
-        try:
-            doc = Document(file)
-            full_text = []
-            
-            # Procesar diferentes elementos del documento
-            for element in doc.iter_inner_content():
-                if isinstance(element, Paragraph):
-                    full_text.append(element.text)
-                elif isinstance(element, Table):
-                    for row in element.rows:
-                        for cell in row.cells:
-                            full_text.append(cell.text)
-            
-            return "\n".join(full_text)
-        except Exception as e:
-            st.error(f"Error leyendo DOCX: {str(e)}")
-            return ""
-        
-
     def _extract_pdf_metadata(self, file):
         """Extrae metadatos de PDFs con soporte para campos vacíos."""
         try:
@@ -204,25 +192,30 @@ class DocumentProcessor:
                 "comments": ""
             }
 
-    def _extract_text_from_docx(self, file):
-        """Extrae texto de DOCX con manejo de formatos complejos."""
+    def _extract_docx_metadata(self, file):
+        """Extrae metadatos de archivos DOCX."""
         try:
             doc = Document(file)
-            full_text = []
-            
-            # Procesar diferentes elementos del documento
-            for element in doc.iter_inner_content():
-                if isinstance(element, Paragraph):
-                    full_text.append(element.text)
-                elif isinstance(element, Table):
-                    for row in element.rows:
-                        for cell in row.cells:
-                            full_text.append(cell.text)
-            
-            return "\n".join(full_text)
+            properties = doc.core_properties
+            return {
+                "title": properties.title or file.name,
+                "author": properties.author or "Desconocido",
+                "creation_date": str(properties.created) if properties.created else "N/A",
+                "subject": properties.subject or "",
+                "keywords": properties.keywords or "",
+                "comments": properties.comments or ""
+            }
         except Exception as e:
-            st.error(f"Error leyendo DOCX: {str(e)}")
-            return ""
+            st.error(f"Error extrayendo metadatos DOCX: {str(e)}")
+            return {
+                "title": file.name,
+                "author": "Desconocido",
+                "creation_date": "N/A",
+                "subject": "",
+                "keywords": "",
+                "comments": ""
+            }
+
     def _extract_text_from_pdf(self, file):
         """Extrae texto de un archivo PDF y registra los números de página en los metadatos."""
         try:
@@ -240,7 +233,26 @@ class DocumentProcessor:
         except Exception as e:
             st.error(f"Error extrayendo texto PDF: {str(e)}")
             return "", []
-        
+
+    def _extract_text_from_docx(self, file):
+        """Extrae texto de DOCX con manejo de formatos complejos."""
+        try:
+            doc = Document(file)
+            full_text = []
+            
+            # Procesar diferentes elementos del documento
+            for element in doc.element.body:
+                if isinstance(element, Paragraph):
+                    full_text.append(element.text)
+                elif isinstance(element, Table):
+                    for row in element.rows:
+                        for cell in row.cells:
+                            full_text.append(cell.text)
+            
+            return "\n".join(full_text)
+        except Exception as e:
+            st.error(f"Error leyendo DOCX: {str(e)}")
+            return ""
         
     def _get_embeddings(self, chunks):
         """Genera embeddings para una lista de chunks de texto."""
@@ -254,27 +266,8 @@ class DocumentProcessor:
             return embeddings
         except Exception as e:
             st.error(f"Error generando embeddings: {str(e)}")
-            return [] 
+            return []
 
-    def _process_chunk_pages(self, chunk):
-        """Procesa un chunk de texto para extraer información de páginas."""
-        try:
-            # Busca marcadores de página en el chunk (ej: \x02PAGE:X\x03)
-            page_markers = re.findall(r'\x02PAGE:(\d+)\x03', chunk)
-            if page_markers:
-                start_page = int(page_markers[0])
-                end_page = int(page_markers[-1])
-            else:
-                start_page, end_page = None, None
-
-            # Limpia el texto eliminando los marcadores de página
-            cleaned_text = re.sub(r'\x02PAGE:\d+\x03', '', chunk).strip()
-
-            return cleaned_text, {"start": start_page, "end": end_page}
-        except Exception as e:
-            st.error(f"Error procesando páginas del chunk: {str(e)}")
-            return chunk, {"start": None, "end": None}   
-            
     def _generate_semantic_tags(self, text):
         """Genera etiquetas semánticas para un texto dado."""
         try:
@@ -283,17 +276,17 @@ class DocumentProcessor:
 
             # Lista de stopwords en español
             spanish_stopwords = [
-                        "de", "la", "que", "el", "en", "y", "a", "los", "del", "se", "las", "por", "un", "para", 
-                        "con", "no", "una", "su", "al", "es", "lo", "como", "más", "pero", "sus", "le", "ya", 
-                        "o", "fue", "este", "ha", "sí", "porque", "esta", "son", "entre", "está", "cuando", 
-                        "muy", "sin", "sobre", "ser", "tiene", "también", "me", "hasta", "hay", "donde", 
-                        "han", "quien", "están", "estado", "desde", "todo", "nos", "durante", "estados", 
-                        "todos", "uno", "les", "ni", "contra", "otros", "fueron", "ese", "eso", "había", 
-                        "ante", "ellos", "e", "esto", "mí", "antes", "algunos", "qué", "unos", "yo", "otro", 
-                        "otras", "otra", "él", "tanto", "esa", "estos", "mucho", "quienes", "nada", "muchos", 
-                        "cual", "sea", "poco", "ella", "estar", "haber", "estas", "estaba", "estamos", 
-                        "algunas", "algo", "nosotros"
-                    ]
+                "de", "la", "que", "el", "en", "y", "a", "los", "del", "se", "las", "por", "un", "para", 
+                "con", "no", "una", "su", "al", "es", "lo", "como", "más", "pero", "sus", "le", "ya", 
+                "o", "fue", "este", "ha", "sí", "porque", "esta", "son", "entre", "está", "cuando", 
+                "muy", "sin", "sobre", "ser", "tiene", "también", "me", "hasta", "hay", "donde", 
+                "han", "quien", "están", "estado", "desde", "todo", "nos", "durante", "estados", 
+                "todos", "uno", "les", "ni", "contra", "otros", "fueron", "ese", "eso", "había", 
+                "ante", "ellos", "e", "esto", "mí", "antes", "algunos", "qué", "unos", "yo", "otro", 
+                "otras", "otra", "él", "tanto", "esa", "estos", "mucho", "quienes", "nada", "muchos", 
+                "cual", "sea", "poco", "ella", "estar", "haber", "estas", "estaba", "estamos", 
+                "algunas", "algo", "nosotros"
+            ]
 
             # Configura TfidfVectorizer para español
             vectorizer = TfidfVectorizer(stop_words=spanish_stopwords, max_features=10)
@@ -314,7 +307,9 @@ class DocumentProcessor:
 class ChatManager:
     def __init__(self):
         self.vectorizer = TfidfVectorizer(stop_words='english')
-    
+        self.similarity_threshold = 0.82  # Más estricto
+        self.min_chunk_length = 150  # Ignorar chunks cortos    
+
     def hybrid_search(self, query, top_k=5):
         try:
             # Búsqueda vectorial con FAISS
@@ -375,15 +370,27 @@ class ChatManager:
             if not isinstance(sources, list) or not all(isinstance(src, dict) for src in sources):
                 raise ValueError("La estructura de 'sources' es inválida. Debe ser una lista de diccionarios.")
             
-            # Formatear las fuentes
-            formatted_sources = []
+            # Agrupar fuentes por autor, título y año
+            grouped_sources = defaultdict(list)
             for src in sources:
-                if isinstance(src, dict):
-                    formatted_sources.append(
-                        f"{src.get('source', 'Desconocido')} "
-                        f"(Páginas {src.get('metadata', {}).get('pages', 'N/A')}) - "
-                        f"{', '.join(src.get('semantic_tags', [])[:2])}"
-                    )
+                metadata = extract_metadata_from_filename(src.get("source", "Desconocido"))
+                key = (metadata["author"], metadata["title"], metadata["year"])
+                grouped_sources[key].append(src)
+            
+            # Formatear las fuentes agrupadas
+            formatted_sources = []
+            for (author, title, year), src_list in grouped_sources.items():
+                pages = set()
+                tags = set()
+                for src in src_list:
+                    pages.add(src.get("metadata", {}).get("pages", "N/A"))
+                    tags.update(src.get("semantic_tags", []))
+                
+                formatted_sources.append(
+                    f"{author} ({year}). {title}. "
+                    f"Páginas: {', '.join(sorted(pages))}. "
+                    f"Etiquetas: {', '.join(sorted(tags)[:3])}"
+                )
             
             # Generar la respuesta usando la API de DeepSeek
             response = requests.post(
@@ -410,8 +417,7 @@ class ChatManager:
                 raise Exception(f"API Error: {response.status_code}")
                 
         except Exception as e:
-            return f"Error: {str(e)}", []  # Devuelve un mensaje de error
-        
+            return f"Error: {str(e)}", []        
         
         
 # Interfaz de usuario mejorada
