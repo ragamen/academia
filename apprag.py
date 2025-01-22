@@ -646,3 +646,4 @@ if __name__ == "__main__":
     ui = DeepSeekUI()
     ui.render_sidebar()
     ui.render_chat()
+    
