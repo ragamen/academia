@@ -23,7 +23,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 from docx.text.paragraph import Paragraph  # Importar Paragraph
-
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 # Configuración inicial
 embedder = SentenceTransformer('all-MiniLM-L6-v2')
 

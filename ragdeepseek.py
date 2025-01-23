@@ -15,7 +15,7 @@ import fitz  # PyMuPDF
 import struct
 from docx import Document
 from functools import lru_cache
-
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 # Configuración inicial
 embedder = SentenceTransformer('all-MiniLM-L6-v2')  # Modelo de embeddings
 
