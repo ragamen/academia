@@ -11,7 +11,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 # Configuración inicial
-DEEPSEEK_API_KEY = "sk-1fafb10417c84692b738fd84598fd7a8"  # Reemplazar con tu API key
+
 deepseek = DeepSeekAPI(api_key=DEEPSEEK_API_KEY)
 EMBED_MODEL = "deepseek-embeddings-v1"
 CHAT_MODEL = "deepseek-chat"

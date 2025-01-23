@@ -29,7 +29,7 @@ import re
 
 # Configuración inicial
 embedder = SentenceTransformer('all-MiniLM-L6-v2')
-DEEPSEEK_API_KEY = "sk-1fafb10417c84692b738fd84598fd7a8"
+
 
 class SessionState:
     def __init__(self):

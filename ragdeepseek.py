@@ -18,7 +18,7 @@ from functools import lru_cache
 
 # Configuración inicial
 embedder = SentenceTransformer('all-MiniLM-L6-v2')  # Modelo de embeddings
-DEEPSEEK_API_KEY = "sk-1fafb10417c84692b738fd84598fd7a8"
+
 
 # Inicialización del estado de sesión
 class SessionState:

@@ -26,7 +26,7 @@ from docx.text.paragraph import Paragraph  # Importar Paragraph
 
 # Configuración inicial
 embedder = SentenceTransformer('all-MiniLM-L6-v2')
-DEEPSEEK_API_KEY = "sk-1fafb10417c84692b738fd84598fd7a8"
+
 
 # Configurar el tema oscuro
 st.set_page_config(page_title="Plataforma RAG", page_icon="🤖", layout="centered", initial_sidebar_state="auto")
