@@ -364,7 +364,7 @@ class ChatManager:
     def generate_response(self, query, context, sources):
         try:
             # Depuración: Verifica la estructura de `sources`
-            st.write("Estructura de sources:", sources)  # Muestra la estructura de sources
+            # st.write("Estructura de sources:", sources)  # Muestra la estructura de sources
             
             # Asegúrate de que `sources` sea una lista de diccionarios
             if not isinstance(sources, list) or not all(isinstance(src, dict) for src in sources):
