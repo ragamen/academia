@@ -1,3 +1,4 @@
+# app con la API Mistral
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 import warnings
@@ -31,7 +32,7 @@ from supabase_manager import SupabaseManager
 from mistralai.client import MistralClient
 from mistralai.models.chat_completion import ChatMessage
 #embedder = SentenceTransformer('all-MiniLM-L6-v2')
-MISTRAL_API_KEY = "yxrklpJOVs2mhBMfi0UK74CfGpzGcbsI"  # Reemplaza con tu clave real
+MISTRAL_API_KEY = st.secrets["MISTRAL_API_KEY"]  # Reemplaza con tu clave real
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"  # URL de la API de Mistral
 mistral = MistralClient(api_key=MISTRAL_API_KEY)
 try:
@@ -1005,19 +1006,25 @@ class DeepSeekUI:
 # Función para generar contenido PDF dinámico
 
 
-def generar_pdf(texto):
-    text1 = limpiar_texto(texto)
-    texto = text1.replace('\n', ' ')
+def generar_pdf(pdf_text):
+    # Crear un objeto PDF
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Helvetica", size=12)
-    pdf.multi_cell(190, 10, texto)
     
-    pdf_output = BytesIO()
-    pdf.output(pdf_output)
-    pdf_output.seek(0)  # Regresar al inicio del archivo en memoria
+    # Agregar texto al PDF
+    pdf.multi_cell(0, 10, pdf_text)
     
-    return pdf_output
+    # Generar los bytes del PDF y guardarlos en memoria
+    pdf_bytes = BytesIO()
+    pdf_bytes.write(pdf.output(dest='S').encode('latin1'))  # Convertir a bytes
+    
+    # Reiniciar el puntero al inicio del archivo
+    pdf_bytes.seek(0)  
+    
+    return pdf_bytes.getvalue()  # Devolver los bytes del PDF
+
+
 def limpiar_texto(texto):
     reemplazos = {
         "≥": ">=",  
