@@ -1011,7 +1011,7 @@ def generar_pdf(pdf_text):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Helvetica", size=12)
-    
+    pdf_text = limpiar_texto(pdf_text)
     # Agregar texto al PDF
     pdf.multi_cell(0, 10, pdf_text)
     
