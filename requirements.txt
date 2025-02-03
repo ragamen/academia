@@ -47,7 +47,6 @@ langchain-core==0.3.33
 langchain-text-splitters==0.3.5
 langsmith==0.3.4
 llama-index-core==0.12.15
-llama-index-llms-mistralai==0.3.2
 lxml==5.3.0
 markdown-it-py==3.0.0
 MarkupSafe==3.0.2
