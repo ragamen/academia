@@ -262,7 +262,8 @@ class DocumentProcessor:
                 # Generación de metadatos
                 doc_id = generate_doc_id(file.name, idx)
                 chunk_metadata = {
-                    "source": metadata.get("/Title", "Desconocido"),
+                    "source": file.name,
+                    "titulo": metadata.get("/Title", "Desconocido"),
                     "pages": f"{pages[0]}-{pages[-1]}" if len(pages) > 1 else str(pages[0]),
                     "exact_pages": pages,
                     "start_char": chunk_info.get("start_char", 0),
@@ -352,6 +353,7 @@ class DocumentProcessor:
             return {
                 "title": metadata.get("title", "Sin título"),
                 "author": metadata.get("author", "Desconocido"),
+                "categoria": metadata.get("category", "General"),
                 "creation_date": metadata.get("creationDate", "N/A"),
                 "subject": metadata.get("subject", ""),
                 "keywords": metadata.get("keywords", ""),
@@ -568,11 +570,11 @@ class ChatManager:
             for res in results:
                 meta = res.get('metadata', {})
                 author = meta.get('author', 'Desconocido')
-                title = meta.get('source', 'Sin título')
+                title = meta.get('titulo', 'Sin título')
                 categoria = meta.get('categoria', 'Sin categoría')
                 year = meta.get('year', 'N/A')
-
-                key = (author, title, categoria, year)
+                source = meta.get('source', 'N/A')
+                key = (author, title, categoria, year,source)
 
                 if key not in source_map:
                     pages = meta.get('exact_pages', [])
@@ -585,6 +587,7 @@ class ChatManager:
                         'title': key[1],
                         'categoria': key[2],
                         'year': key[3],
+                        "source": key[4],
                         'pages': sorted(set(pages))
                     }
                     source_counter += 1
