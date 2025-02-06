@@ -1,6 +1,8 @@
 # app con la API Mistral
+import base64
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
+import os
 import warnings
 from typing import Tuple, List, Dict
 from PyPDF2 import PdfReader
@@ -573,8 +575,8 @@ class ChatManager:
                 title = meta.get('titulo', 'Sin título')
                 categoria = meta.get('categoria', 'Sin categoría')
                 year = meta.get('year', 'N/A')
-                source = meta.get('source', 'N/A')
-                key = (author, title, categoria, year,source)
+                fuente = meta.get('source', 'N/A')
+                key = (author, title, categoria, year,fuente)
 
                 if key not in source_map:
                     pages = meta.get('exact_pages', [])
@@ -587,7 +589,7 @@ class ChatManager:
                         'title': key[1],
                         'categoria': key[2],
                         'year': key[3],
-                        "source": key[4],
+                        "fuente": key[4],
                         'pages': sorted(set(pages))
                     }
                     source_counter += 1
@@ -638,6 +640,7 @@ class ChatManager:
                     "title": key[1],
                     "categoria": key[2],
                     "year": key[3],
+                    "fuente": key[4],
                     "pages": sorted(data['pages'])
                 })
 
@@ -752,29 +755,37 @@ class DeepSeekUI:
                     st.write(f"**{fuente['titulo']}**  \n*{fuente['autor']} ({fuente['anio_publicacion']})*")
 
     def render_chat(self):
+        # Dividir la interfaz en dos columnas
+                
         st.title("🧠 Asistente DeepSeek RAG")
-        
+            
         # Definir el contenedor PRINCIPAL del chat
         main_chat_container = st.container(height=500)
-        
-        with main_chat_container:
-            # Contenedor interno para historial
-            history_container = st.container()
+        col_chat, col_pdf = st.columns([0.5, 0.5])
+        with col_chat:    
             
-            # Contenedor para nuevos mensajes
-            message_container = st.container()
-            
-            # Mostrar historial existente
-            with history_container:
-                for msg in st.session_state.state.chat_history:
-                    self._render_message(msg)
-            
-            # Procesar nueva consulta
-            query = st.chat_input("Escribe tu pregunta...", key="chat_input")
-            if query:
-                with message_container:
-                    self._handle_user_query(query)
-                st.rerun()
+            with main_chat_container:
+                # Contenedor interno para historial
+                history_container = st.container()
+                
+                # Contenedor para nuevos mensajes
+                message_container = st.container()
+                
+                # Mostrar historial existente
+                with history_container:
+                    for msg in st.session_state.state.chat_history:
+                        self._render_message(msg)
+                
+                # Procesar nueva consulta
+                query = st.chat_input("Escribe tu pregunta...", key="chat_input")
+                if query:
+                    with message_container:
+                        self._handle_user_query(query)
+                    st.rerun()
+        with col_pdf: 
+             # Columna para el visor de PDF
+            st.subheader("📚 Visor de Fuentes")
+            self._render_pdf_viewer()   
 
 # Versión CORREGIDA (app.py)
 
@@ -940,7 +951,55 @@ class DeepSeekUI:
             
         except Exception as e:
             st.error(f"Error procesando consulta: {str(e)}")
+
+
+    def _render_pdf_viewer(self):
+        """Muestra el PDF correspondiente a la fuente del último mensaje."""
+        if not hasattr(st.session_state.state, 'chat_history') or not st.session_state.state.chat_history:
+            st.info("No hay fuentes disponibles.")
+            return
+
+        # Obtener el último mensaje del asistente
+        last_message = next(
+            (msg for msg in reversed(st.session_state.state.chat_history) if msg['type'] == 'assistant'), None
+        )
+
+        if not last_message or 'sources' not in last_message or not last_message['sources']:
+            st.info("No hay fuentes disponibles para esta respuesta.")
+            return
+
+        # Obtener la primera fuente del último mensaje
+        sourcex = last_message['sources'][0]
+        pdf_name = sourcex.get('fuente', None)  # Asumimos que 'path' contiene la ruta al PDF
+
+        if not pdf_name:
+            st.warning("No se encontró el archivo PDF {pdf_name} xxx para esta fuente.")
+            return
         
+        # Construir la ruta completa del PDF
+        pdf_path = os.path.join(os.path.dirname(__file__), pdf_name)  # Mismo directorio que app.py
+
+            # Verificar si el archivo existe
+        if not os.path.exists(pdf_path):
+            st.error(f"El archivo PDF '{pdf_name}' no existe en la carpeta del ejecutable.")
+            return
+        # Mostrar el PDF
+        
+        try:
+            with open(pdf_path, "rb") as pdf_file:
+                pdf_bytes = pdf_file.read()
+                st.download_button(
+                    label="📄 Descargar PDF",
+                    data=pdf_bytes,
+                    file_name=pdf_name,
+                    mime="application/pdf"
+                )
+                st.components.v1.html(f"""
+                    <iframe src="data:application/pdf;base64,{base64.b64encode(pdf_bytes).decode()}" 
+                    width="100%" height="500px" type="application/pdf"></iframe>
+                """, height=550)
+        except Exception as e:
+            st.error(f"Error al cargar el PDF: {str(e)}")        
 
     def _show_database_stats(self):
         """Muestra estadísticas clave de la base de datos"""
