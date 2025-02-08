@@ -2,6 +2,7 @@
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
+from pdf2image import convert_from_bytes
 import os
 import warnings
 from typing import Tuple, List, Dict
@@ -14,6 +15,7 @@ import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
 from datetime import datetime
+from streamlit_pdf_viewer import pdf_viewer
 from collections import defaultdict
 import hashlib
 import re
@@ -677,7 +679,18 @@ class DeepSeekUI:
             supabase_client=st.session_state.state.supabase  # <-- Cliente Supabase
         )
         self.supabase = st.session_state.state.supabase
+        # Inicializar selected_pdfs en el session_state si aún no existe
+        if "selected_pdfs" not in st.session_state:
+            st.session_state.selected_pdfs = []
+            
+    #st.set_page_config(layout="wide")
+    st.set_page_config(
+        page_title="Ex-stream-ly Cool App",
+        page_icon="🧊",
+        layout="wide",
+        initial_sidebar_state="collapsed",
 
+    )
     def render_sidebar(self):
         with st.sidebar:
             st.header("📥 **Carga de Documentos**")
@@ -760,32 +773,31 @@ class DeepSeekUI:
         st.title("🧠 Asistente DeepSeek RAG")
             
         # Definir el contenedor PRINCIPAL del chat
-        main_chat_container = st.container(height=500)
-        col_chat, col_pdf = st.columns([0.5, 0.5])
+        col_chat, col_pdf = st.columns([1, 1], border=True)
         with col_chat:    
             
-            with main_chat_container:
                 # Contenedor interno para historial
-                history_container = st.container()
+             history_container = st.container()
                 
                 # Contenedor para nuevos mensajes
-                message_container = st.container()
                 
                 # Mostrar historial existente
-                with history_container:
-                    for msg in st.session_state.state.chat_history:
-                        self._render_message(msg)
+             with history_container:
+                  for msg in st.session_state.state.chat_history:
+                      self._render_message(msg)
                 
                 # Procesar nueva consulta
-                query = st.chat_input("Escribe tu pregunta...", key="chat_input")
-                if query:
-                    with message_container:
-                        self._handle_user_query(query)
-                    st.rerun()
-        with col_pdf: 
-             # Columna para el visor de PDF
+        # Crear columna con scroll interno
+        with col_pdf:
             st.subheader("📚 Visor de Fuentes")
-            self._render_pdf_viewer()   
+            self._render_pdf_viewer()
+
+            
+     # Procesar nueva consulta (fuera de los contenedores)
+        query = st.chat_input("Escribe tu pregunta...", key="chat_input")
+        if query:
+            self._handle_user_query(query)
+            st.rerun()  # Recargar la interfaz correctamente       
 
 # Versión CORREGIDA (app.py)
 
@@ -883,6 +895,12 @@ class DeepSeekUI:
                         Páginas: {', '.join(map(str, source['pages'])) if source['pages'] else 'N/A'}
                     </div>
                     """, unsafe_allow_html=True)
+                    button_key = f"mostrar_pdf_{source['fuente']}_{source['number']}"
+                    if st.button("Mostrar PDF", key=button_key):
+                        # Si el PDF no está ya en la lista de seleccionados, se agrega
+                        if source['fuente'] not in st.session_state.selected_pdfs:
+                            st.session_state.selected_pdfs.append(source['fuente'])
+                        st.rerun()  # Recargar para actualizar el visor                    
 
                 # Generar PDF y botón de descarga
                 col1, col2 = st.columns(2)
@@ -952,55 +970,87 @@ class DeepSeekUI:
         except Exception as e:
             st.error(f"Error procesando consulta: {str(e)}")
 
+    def pdf_viewer(pdf_bytes, width=700, height=1000):  
+        """Retorna el HTML del visor PDF con altura ajustable"""
+        pdf_base64 = base64.b64encode(pdf_bytes).decode("utf-8")
+        return f"""
+        <iframe 
+            src="data:application/pdf;base64,{pdf_base64}" 
+            width="{width}px" 
+            height="{height}px" 
+            style="border: none; margin-top: 10px;">
+        </iframe>
+        """
 
     def _render_pdf_viewer(self):
-        """Muestra el PDF correspondiente a la fuente del último mensaje."""
-        if not hasattr(st.session_state.state, 'chat_history') or not st.session_state.state.chat_history:
-            st.info("No hay fuentes disponibles.")
+        """Muestra los PDFs con scroll interno en col_pdf"""
+        if not st.session_state.get("selected_pdfs"):
+            st.info("No se ha seleccionado ningún PDF para visualizar.")
             return
 
-        # Obtener el último mensaje del asistente
-        last_message = next(
-            (msg for msg in reversed(st.session_state.state.chat_history) if msg['type'] == 'assistant'), None
-        )
+        # CSS para el contenedor scrollable
+        st.markdown("""
+        <style>
+            .pdf-scroll-container {
+                max-height: 70vh;           /* Altura máxima del contenedor */
+                overflow-y: auto;           /* Scroll vertical */
+                border: 1px solid #ddd;     /* Borde del contenedor */
+                border-radius: 8px;         /* Bordes redondeados */
+                padding: 15px;              /* Espaciado interno */
+                background: #f8f9fa;        /* Fondo claro */
+            }
+            .pdf-item {
+                margin-bottom: 25px;        /* Espacio entre PDFs */
+            }
+        </style>
+        """, unsafe_allow_html=True)
 
-        if not last_message or 'sources' not in last_message or not last_message['sources']:
-            st.info("No hay fuentes disponibles para esta respuesta.")
-            return
+        # Iniciar contenedor scrollable
+        st.markdown('<div class="pdf-scroll-container">', unsafe_allow_html=True)
 
-        # Obtener la primera fuente del último mensaje
-        sourcex = last_message['sources'][0]
-        pdf_name = sourcex.get('fuente', None)  # Asumimos que 'path' contiene la ruta al PDF
+        # Generar contenido HTML internamente
+        html_content = []
+        for pdf_name in st.session_state.selected_pdfs:
+            pdf_path = os.path.join(os.path.dirname(__file__), pdf_name)
 
-        if not pdf_name:
-            st.warning("No se encontró el archivo PDF {pdf_name} xxx para esta fuente.")
-            return
-        
-        # Construir la ruta completa del PDF
-        pdf_path = os.path.join(os.path.dirname(__file__), pdf_name)  # Mismo directorio que app.py
+            if not os.path.exists(pdf_path):
+                html_content.append(f"<div class='pdf-item'>❌ Error: {pdf_name} no existe</div>")
+                continue
 
-            # Verificar si el archivo existe
-        if not os.path.exists(pdf_path):
-            st.error(f"El archivo PDF '{pdf_name}' no existe en la carpeta del ejecutable.")
-            return
-        # Mostrar el PDF
-        
-        try:
-            with open(pdf_path, "rb") as pdf_file:
-                pdf_bytes = pdf_file.read()
-                st.download_button(
-                    label="📄 Descargar PDF",
-                    data=pdf_bytes,
-                    file_name=pdf_name,
-                    mime="application/pdf"
-                )
-                st.components.v1.html(f"""
-                    <iframe src="data:application/pdf;base64,{base64.b64encode(pdf_bytes).decode()}" 
-                    width="100%" height="500px" type="application/pdf"></iframe>
-                """, height=550)
-        except Exception as e:
-            st.error(f"Error al cargar el PDF: {str(e)}")        
+            try:
+                with open(pdf_path, "rb") as pdf_file:
+                    pdf_bytes = pdf_file.read()
 
+                    # Usar streamlit-pdf-viewer para visualizar el PDF
+                    iframe_html = pdf_viewer(pdf_bytes, width=700, height=600)  # Se ajusta la altura
+
+                    # Construir sección PDF como HTML
+                    section = f"""
+                    <div class="pdf-item">
+                        <h3>📄 {pdf_name}</h3>
+                        <a href="data:application/pdf;base64,{base64.b64encode(pdf_bytes).decode('utf-8')}" 
+                        download="{pdf_name}" 
+                        style="display: block; margin: 10px 0;">
+                            ⬇️ Descargar
+                        </a>
+                        <div style="max-height: 600px; overflow: auto; border: 1px solid #ddd; padding: 10px; background: #f8f9fa;">
+                            <!-- Contenedor scrollable del iframe -->
+                            {iframe_html}
+                        </div>                    
+                    """
+                    html_content.append(section)
+
+            except Exception as e:
+                html_content.append(f"<div class='pdf-item'>❌ Error cargando {pdf_name}: {str(e)}</div>")
+
+        # Finalizar el contenedor scrollable
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Renderizar el contenido HTML
+        for content in html_content:
+            st.markdown(content, unsafe_allow_html=True)
+
+                        
     def _show_database_stats(self):
         """Muestra estadísticas clave de la base de datos"""
         try:
@@ -1067,6 +1117,21 @@ class DeepSeekUI:
             status_text.empty()
 # Función para generar contenido PDF dinámico
 
+def display_pdf(pdf_path):
+    """Lee un PDF y lo muestra en Streamlit usando base64 correctamente."""
+    with open(pdf_path, "rb") as pdf_file:
+        base64_pdf = base64.b64encode(pdf_file.read()).decode("utf-8")
+
+    pdf_display = f"""
+    <iframe 
+        src="data:application/pdf;base64,{base64_pdf}" 
+        width="100%" 
+        height="800px"
+        style="border: none;">
+    </iframe>
+    """
+    
+    st.markdown(pdf_display, unsafe_allow_html=True)
 
 def generar_pdf(pdf_text):
     # Crear un objeto PDF
